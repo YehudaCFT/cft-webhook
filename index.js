@@ -87,6 +87,7 @@ function mapFormToSunwave(fields) {
   ].filter(Boolean).join('\n');
 
   return {
+    account_id:                    `CFT-${Date.now()}`,
     caller_first_name:             callerFirst,
     caller_last_name:              callerLast,
     caller_email:                  fields['email17'] || fields['email'] || '',
@@ -108,6 +109,9 @@ app.post('/webhook', async (req, res) => {
   try {
     const raw    = req.body;
     const fields = raw['rawRequest'] ? JSON.parse(raw['rawRequest']) : raw;
+
+    // TEMPORARY DEBUG — logs field names only (no values), remove after testing
+    console.log('[DEBUG] Field names received:', Object.keys(fields).join(', '));
 
     const payload     = mapFormToSunwave(fields);
     const bodyString  = JSON.stringify(payload);
