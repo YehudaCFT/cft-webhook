@@ -3,22 +3,8 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-
-// Accept all possible formats Jotform might send
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use((req, _res, next) => {
-  if (!req.body || Object.keys(req.body).length === 0) {
-    let data = '';
-    req.on('data', chunk => { data += chunk; });
-    req.on('end', () => {
-      try { req.rawData = data; } catch(e) {}
-      next();
-    });
-  } else {
-    next();
-  }
-});
 
 // ── Sunwave credentials (loaded from environment variables ONLY) ──
 const SUNWAVE_EMAIL  = process.env.SUNWAVE_EMAIL;
@@ -29,122 +15,104 @@ const SUNWAVE_URL    = 'https://emr.sunwavehealth.com/SunwaveEMR/api/opportunity
 
 // ── Build Sunwave Authorization header ──
 function buildAuthHeader(bodyString) {
-  const dateTime      = new Date().toUTCString();                          // e.g. "Mon, 15 Jan 2026 13:45:12 GMT"
-  const dateTimeB64   = Buffer.from(dateTime).toString('base64');
+  const dateTime    = new Date().toUTCString();
+  const dateTimeB64 = Buffer.from(dateTime).toString('base64');
 
-  const md5Hex        = crypto.createHash('md5').update(bodyString).digest('hex');
-  const md5B64        = Buffer.from(md5Hex)
-                          .toString('base64')
-                          .replace(/\//g, '_')
-                          .replace(/\+/g, '-');
+  const md5Hex  = crypto.createHash('md5').update(bodyString).digest('hex');
+  const md5B64  = Buffer.from(md5Hex).toString('base64')
+                    .replace(/\//g, '_').replace(/\+/g, '-');
 
   const transactionId = uuidv4();
 
   const seed = [
-    SUNWAVE_EMAIL,
-    SUNWAVE_API_ID,
-    dateTimeB64,
-    SUNWAVE_REALM,
-    transactionId,
-    md5B64
+    SUNWAVE_EMAIL, SUNWAVE_API_ID, dateTimeB64,
+    SUNWAVE_REALM, transactionId, md5B64
   ].join(':');
 
-  const hmac = crypto
-    .createHmac('sha512', SUNWAVE_SECRET)
-    .update(seed)
-    .digest('base64')
-    .replace(/\//g, '_')
-    .replace(/\+/g, '-');
+  const hmac = crypto.createHmac('sha512', SUNWAVE_SECRET)
+    .update(seed).digest('base64')
+    .replace(/\//g, '_').replace(/\+/g, '-');
 
   return `Digest ${SUNWAVE_EMAIL}:${SUNWAVE_API_ID}:${dateTimeB64}:${SUNWAVE_REALM}:${transactionId}:${md5B64}:${hmac}`;
 }
 
 // ── Map Jotform fields → Sunwave fields ──
-function mapFormToSunwave(fields) {
+// Field names confirmed from Jotform API on 2026-03-17
+function mapFormToSunwave(f) {
 
-  // Client name — Jotform unique name: name11
-  const patientFirst = fields['name11[first]'] || fields['first_11'] || '';
-  const patientLast  = fields['name11[last]']  || fields['last_11']  || '';
+  // Client name (qid 11, name: name11)
+  const patientFirst = f['name11[first]'] || '';
+  const patientLast  = f['name11[last]']  || '';
 
-  // Parent/Guardian name — Jotform unique name: name17
-  const callerFirst  = fields['name17[first]'] || fields['first_17'] || '';
-  const callerLast   = fields['name17[last]']  || fields['last_17']  || '';
+  // Client DOB (qid 12, name: date)
+  const dobMonth = (f['date[month]'] || '').padStart(2, '0');
+  const dobDay   = (f['date[day]']   || '').padStart(2, '0');
+  const dobYear  =  f['date[year]']  || '';
+  const dob      = dobYear ? `${dobYear}-${dobMonth}-${dobDay}` : '';
 
-  // DOB — Jotform unique name: date (month_12, day_12, year_12)
-  const dobMonth = fields['date[month]'] || fields['month_12'] || '';
-  const dobDay   = fields['date[day]']   || fields['day_12']   || '';
-  const dobYear  = fields['date[year]']  || fields['year_12']  || '';
-  const dob      = (dobMonth && dobDay && dobYear) ? `${dobYear}-${dobMonth.padStart(2,'0')}-${dobDay.padStart(2,'0')}` : '';
+  // Parent/Guardian name (qid 17, name: name17)
+  const callerFirst = f['name17[first]'] || '';
+  const callerLast  = f['name17[last]']  || '';
 
-  // Phone — Jotform unique name: phoneNumber18
-  const phone = fields['phoneNumber18[full]'] || fields['phoneNumber18'] || '';
+  // Parent email (qid 20, name: email20)
+  const callerEmail = f['email20'] || '';
 
-  // Build a plain-text clinical notes block from pre-screener / clinical fields
+  // Parent mobile phone (qid 18, name: phoneNumber18)
+  const phone = f['phoneNumber18[full]'] || f['phoneNumber18'] || '';
+
+  // Insurance
+  const memberId    = f['typeA27'] || '';
+  const groupNumber = f['typeA28'] || '';
+
+  // Clinical notes
   const notes = [
-    fields['howDidYouHear']       ? `Referral source: ${fields['howDidYouHear']}`            : '',
-    fields['reasonForServices']   ? `Reason for services: ${fields['reasonForServices']}`    : '',
-    fields['historyReason']       ? `History/referral: ${fields['historyReason']}`           : '',
-    fields['expectedOutcomes']    ? `Expected outcomes: ${fields['expectedOutcomes']}`       : '',
-    fields['school']              ? `School: ${fields['school']}`                            : '',
-    fields['schoolDistrict']      ? `School district: ${fields['schoolDistrict']}`           : '',
-    fields['gradeLevel']          ? `Grade: ${fields['gradeLevel']}`                         : '',
-    fields['livingSituation']     ? `Living situation: ${fields['livingSituation']}`         : '',
-    fields['substanceUse']        ? `Substance use: ${fields['substanceUse']}`               : '',
-    fields['eatingConcerns']      ? `Eating concerns: ${fields['eatingConcerns']}`           : '',
-    fields['psychiatricSymptoms'] ? `Psychiatric symptoms: ${fields['psychiatricSymptoms']}` : '',
-    fields['priorMHDiagnoses']    ? `Prior MH diagnoses: ${fields['priorMHDiagnoses']}`     : '',
-    fields['medications']         ? `Medications: ${fields['medications']}`                  : '',
-    fields['primaryCareProvider'] ? `PCP: ${fields['primaryCareProvider']}`                 : '',
-    fields['abuseHistory']        ? `Abuse history: ${fields['abuseHistory']}`              : '',
-    fields['legalHistory']        ? `Legal history: ${fields['legalHistory']}`              : '',
-    fields['comments']            ? `Comments: ${fields['comments']}`                       : '',
+    f['howDid']           ? `Referral source: ${f['howDid']}`                   : '',
+    f['legalGuardian']    ? `Guardian relationship: ${f['legalGuardian']}`       : '',
+    f['legalGuardian46']  ? `Reason for services: ${f['legalGuardian46']}`       : '',
+    f['reasonFor']        ? `History/referral: ${f['reasonFor']}`                : '',
+    f['historyRelated']   ? `Expected outcomes: ${f['historyRelated']}`          : '',
+    f['school']           ? `School: ${f['school']}`                             : '',
+    f['school51']         ? `School district: ${f['school51']}`                  : '',
+    f['schoolDistrict']   ? `Grade level: ${f['schoolDistrict']}`                : '',
+    f['currentLiving']    ? `Living situation: ${f['currentLiving']}`            : '',
+    f['typeA67']          ? `Substance use concerns: ${f['typeA67']}`            : '',
+    f['hasYour']          ? `Eating concerns: ${f['hasYour']}`                   : '',
+    f['doesYour']         ? `Mental health diagnoses: ${f['doesYour']}`          : '',
+    f['doesYour75']       ? `Mental health medications: ${f['doesYour75']}`      : '',
+    f['whoIs']            ? `Primary care provider: ${f['whoIs']}`               : '',
+    f['learningDisabilities'] ? `Abuse history: ${f['learningDisabilities']}`    : '',
+    f['hasYour91']        ? `Legal history: ${f['hasYour91']}`                   : '',
+    f['doesYour92']       ? `Aggressive behavior last month: ${f['doesYour92']}` : '',
+    f['typeA13']          ? `Sex assigned at birth: ${f['typeA13']}`             : '',
+    f['typeA94']          ? `Comments/Summary: ${f['typeA94']}`                  : '',
   ].filter(Boolean).join('\n');
 
   return {
-    account_id:                    `CFT-${Date.now()}`,
-    caller_first_name:             callerFirst,
-    caller_last_name:              callerLast,
-    caller_email:                  fields['email17'] || fields['email'] || '',
-    patient_relationship:          fields['relationship'] || 'Parent/Guardian',
-    patient_first_name:            patientFirst,
-    patient_last_name:             patientLast,
-    patient_date_of_birth:         dob,
-    patient_phone_mobile:          phone,
-    insurance_group_number:        fields['groupNumber'] || '',
-    member_id:                     fields['memberID']    || '',
-    message_for_intake:            notes,
+    account_id:                     `CFT-${Date.now()}`,
+    caller_first_name:              callerFirst,
+    caller_last_name:               callerLast,
+    caller_email:                   callerEmail,
+    patient_relationship:           'Parent/Guardian',
+    patient_first_name:             patientFirst,
+    patient_last_name:              patientLast,
+    patient_date_of_birth:          dob,
+    patient_phone_mobile:           phone,
+    member_id:                      memberId,
+    insurance_group_number:         groupNumber,
+    message_for_intake:             notes,
     admission_representative_email: SUNWAVE_EMAIL,
   };
 }
 
 // ── Webhook endpoint ──
 app.post('/webhook', async (req, res) => {
-
   try {
-    // Parse body from all possible Jotform formats
-    let fields = {};
-    if (req.body && Object.keys(req.body).length > 0) {
-      fields = req.body['rawRequest'] ? JSON.parse(req.body['rawRequest']) : req.body;
-    } else if (req.rawData) {
-      try {
-        // Try JSON first
-        fields = JSON.parse(req.rawData);
-      } catch(e) {
-        // Try URL-encoded
-        const params = new URLSearchParams(req.rawData);
-        params.forEach((v, k) => { fields[k] = v; });
-        if (fields['rawRequest']) fields = JSON.parse(fields['rawRequest']);
-      }
-    }
+    const raw    = req.body;
+    const fields = raw['rawRequest'] ? JSON.parse(raw['rawRequest']) : raw;
 
-    // TEMPORARY DEBUG — logs raw body to see exactly what Jotform sends
-    console.log('[DEBUG] Raw body keys:', Object.keys(req.body || {}).join(', '));
-    console.log('[DEBUG] Fields found:', Object.keys(fields).join(', '));
-    console.log('[DEBUG] Raw data sample:', (req.rawData || '').substring(0, 500));
-
-    const payload     = mapFormToSunwave(fields);
-    const bodyString  = JSON.stringify(payload);
-    const authHeader  = buildAuthHeader(bodyString);
+    const payload    = mapFormToSunwave(fields);
+    const bodyString = JSON.stringify(payload);
+    const authHeader = buildAuthHeader(bodyString);
 
     const response = await fetch(SUNWAVE_URL, {
       method:  'POST',
@@ -158,7 +126,6 @@ app.post('/webhook', async (req, res) => {
     const result = await response.json();
 
     if (response.ok) {
-      // HIPAA-safe log: no PHI, just success signal
       console.log(`[OK] Sunwave record created at ${new Date().toISOString()}`);
       return res.status(200).json({ status: 'success' });
     } else {
@@ -172,7 +139,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// ── Health check (Render uses this to confirm the app is alive) ──
+// ── Health check ──
 app.get('/', (_req, res) => res.send('CFT Webhook — OK'));
 
 const PORT = process.env.PORT || 3000;
