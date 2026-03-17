@@ -1,0 +1,16 @@
+{
+  "name": "cft-jotform-sunwave-webhook",
+  "version": "1.0.0",
+  "description": "HIPAA-compliant webhook: Jotform → Sunwave for Center for Teens",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "uuid": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
