@@ -48,48 +48,56 @@ function buildAuthHeader(bodyString) {
 // ── Map Jotform fields → Sunwave fields ──
 function mapFormToSunwave(fields) {
 
-  // Helper: split "First Last" into parts
-  const splitName = (full = '') => {
-    const parts = full.trim().split(/\s+/);
-    return { first: parts[0] || '', last: parts.slice(1).join(' ') || '' };
-  };
+  // Client name — Jotform unique name: name11
+  const patientFirst = fields['name11[first]'] || fields['first_11'] || '';
+  const patientLast  = fields['name11[last]']  || fields['last_11']  || '';
 
-  const clientName  = splitName(fields['clientName']  || fields['name']);
-  const parentName  = splitName(fields['parentName']  || fields['guardianName']);
+  // Parent/Guardian name — Jotform unique name: name17
+  const callerFirst  = fields['name17[first]'] || fields['first_17'] || '';
+  const callerLast   = fields['name17[last]']  || fields['last_17']  || '';
+
+  // DOB — Jotform unique name: date (month_12, day_12, year_12)
+  const dobMonth = fields['date[month]'] || fields['month_12'] || '';
+  const dobDay   = fields['date[day]']   || fields['day_12']   || '';
+  const dobYear  = fields['date[year]']  || fields['year_12']  || '';
+  const dob      = (dobMonth && dobDay && dobYear) ? `${dobYear}-${dobMonth.padStart(2,'0')}-${dobDay.padStart(2,'0')}` : '';
+
+  // Phone — Jotform unique name: phoneNumber18
+  const phone = fields['phoneNumber18[full]'] || fields['phoneNumber18'] || '';
 
   // Build a plain-text clinical notes block from pre-screener / clinical fields
   const notes = [
-    fields['howDidYouHear']       ? `Referral source: ${fields['howDidYouHear']}`          : '',
-    fields['reasonForServices']   ? `Reason for services: ${fields['reasonForServices']}`  : '',
-    fields['historyReason']       ? `History/referral: ${fields['historyReason']}`         : '',
-    fields['expectedOutcomes']    ? `Expected outcomes: ${fields['expectedOutcomes']}`     : '',
-    fields['school']              ? `School: ${fields['school']}`                          : '',
-    fields['schoolDistrict']      ? `School district: ${fields['schoolDistrict']}`         : '',
-    fields['gradeLevel']          ? `Grade: ${fields['gradeLevel']}`                       : '',
-    fields['livingSituation']     ? `Living situation: ${fields['livingSituation']}`       : '',
-    fields['substanceUse']        ? `Substance use: ${fields['substanceUse']}`             : '',
-    fields['eatingConcerns']      ? `Eating concerns: ${fields['eatingConcerns']}`         : '',
+    fields['howDidYouHear']       ? `Referral source: ${fields['howDidYouHear']}`            : '',
+    fields['reasonForServices']   ? `Reason for services: ${fields['reasonForServices']}`    : '',
+    fields['historyReason']       ? `History/referral: ${fields['historyReason']}`           : '',
+    fields['expectedOutcomes']    ? `Expected outcomes: ${fields['expectedOutcomes']}`       : '',
+    fields['school']              ? `School: ${fields['school']}`                            : '',
+    fields['schoolDistrict']      ? `School district: ${fields['schoolDistrict']}`           : '',
+    fields['gradeLevel']          ? `Grade: ${fields['gradeLevel']}`                         : '',
+    fields['livingSituation']     ? `Living situation: ${fields['livingSituation']}`         : '',
+    fields['substanceUse']        ? `Substance use: ${fields['substanceUse']}`               : '',
+    fields['eatingConcerns']      ? `Eating concerns: ${fields['eatingConcerns']}`           : '',
     fields['psychiatricSymptoms'] ? `Psychiatric symptoms: ${fields['psychiatricSymptoms']}` : '',
-    fields['priorMHDiagnoses']    ? `Prior MH diagnoses: ${fields['priorMHDiagnoses']}`   : '',
-    fields['medications']         ? `Medications: ${fields['medications']}`                : '',
-    fields['primaryCareProvider'] ? `PCP: ${fields['primaryCareProvider']}`               : '',
-    fields['abuseHistory']        ? `Abuse history: ${fields['abuseHistory']}`            : '',
-    fields['legalHistory']        ? `Legal history: ${fields['legalHistory']}`            : '',
-    fields['comments']            ? `Comments: ${fields['comments']}`                     : '',
+    fields['priorMHDiagnoses']    ? `Prior MH diagnoses: ${fields['priorMHDiagnoses']}`     : '',
+    fields['medications']         ? `Medications: ${fields['medications']}`                  : '',
+    fields['primaryCareProvider'] ? `PCP: ${fields['primaryCareProvider']}`                 : '',
+    fields['abuseHistory']        ? `Abuse history: ${fields['abuseHistory']}`              : '',
+    fields['legalHistory']        ? `Legal history: ${fields['legalHistory']}`              : '',
+    fields['comments']            ? `Comments: ${fields['comments']}`                       : '',
   ].filter(Boolean).join('\n');
 
   return {
-    caller_first_name:          parentName.first,
-    caller_last_name:           parentName.last,
-    caller_email:               fields['parentEmail']   || fields['email'] || '',
-    patient_relationship:       fields['relationship']  || 'Parent/Guardian',
-    patient_first_name:         clientName.first,
-    patient_last_name:          clientName.last,
-    patient_date_of_birth:      fields['clientDOB']     || fields['dob']   || '',
-    patient_phone_mobile:       fields['parentPhone']   || fields['phone'] || '',
-    insurance_group_number:     fields['groupNumber']   || '',
-    member_id:                  fields['memberID']      || '',
-    message_for_intake:         notes,
+    caller_first_name:             callerFirst,
+    caller_last_name:              callerLast,
+    caller_email:                  fields['email17'] || fields['email'] || '',
+    patient_relationship:          fields['relationship'] || 'Parent/Guardian',
+    patient_first_name:            patientFirst,
+    patient_last_name:             patientLast,
+    patient_date_of_birth:         dob,
+    patient_phone_mobile:          phone,
+    insurance_group_number:        fields['groupNumber'] || '',
+    member_id:                     fields['memberID']    || '',
+    message_for_intake:            notes,
     admission_representative_email: SUNWAVE_EMAIL,
   };
 }
