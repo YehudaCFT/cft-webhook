@@ -107,6 +107,10 @@ function mapFormToSunwave(fields) {
 app.post('/webhook', async (req, res) => {
 
   try {
+    // TEMPORARY DEBUG — logs raw body to see exactly what Jotform sends
+    console.log('[DEBUG] Raw body keys:', Object.keys(req.body).join(', '));
+    console.log('[DEBUG] Raw body sample:', JSON.stringify(req.body).substring(0, 800));
+
     const raw    = req.body;
     const fields = raw['rawRequest'] ? JSON.parse(raw['rawRequest']) : raw;
 
