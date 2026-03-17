@@ -3,8 +3,22 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
+
+// Accept all possible formats Jotform might send
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use((req, _res, next) => {
+  if (!req.body || Object.keys(req.body).length === 0) {
+    let data = '';
+    req.on('data', chunk => { data += chunk; });
+    req.on('end', () => {
+      try { req.rawData = data; } catch(e) {}
+      next();
+    });
+  } else {
+    next();
+  }
+});
 
 // ── Sunwave credentials (loaded from environment variables ONLY) ──
 const SUNWAVE_EMAIL  = process.env.SUNWAVE_EMAIL;
@@ -107,15 +121,26 @@ function mapFormToSunwave(fields) {
 app.post('/webhook', async (req, res) => {
 
   try {
+    // Parse body from all possible Jotform formats
+    let fields = {};
+    if (req.body && Object.keys(req.body).length > 0) {
+      fields = req.body['rawRequest'] ? JSON.parse(req.body['rawRequest']) : req.body;
+    } else if (req.rawData) {
+      try {
+        // Try JSON first
+        fields = JSON.parse(req.rawData);
+      } catch(e) {
+        // Try URL-encoded
+        const params = new URLSearchParams(req.rawData);
+        params.forEach((v, k) => { fields[k] = v; });
+        if (fields['rawRequest']) fields = JSON.parse(fields['rawRequest']);
+      }
+    }
+
     // TEMPORARY DEBUG — logs raw body to see exactly what Jotform sends
-    console.log('[DEBUG] Raw body keys:', Object.keys(req.body).join(', '));
-    console.log('[DEBUG] Raw body sample:', JSON.stringify(req.body).substring(0, 800));
-
-    const raw    = req.body;
-    const fields = raw['rawRequest'] ? JSON.parse(raw['rawRequest']) : raw;
-
-    // TEMPORARY DEBUG — logs field names only (no values), remove after testing
-    console.log('[DEBUG] Field names received:', Object.keys(fields).join(', '));
+    console.log('[DEBUG] Raw body keys:', Object.keys(req.body || {}).join(', '));
+    console.log('[DEBUG] Fields found:', Object.keys(fields).join(', '));
+    console.log('[DEBUG] Raw data sample:', (req.rawData || '').substring(0, 500));
 
     const payload     = mapFormToSunwave(fields);
     const bodyString  = JSON.stringify(payload);
