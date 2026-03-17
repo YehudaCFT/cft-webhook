@@ -6,7 +6,7 @@ const app = express();
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// ── Sunwave credentials (loaded from environment variables ONLY) ──
+// ── Sunwave credentials ──
 const SUNWAVE_EMAIL  = process.env.SUNWAVE_EMAIL;
 const SUNWAVE_API_ID = process.env.SUNWAVE_API_ID;
 const SUNWAVE_SECRET = process.env.SUNWAVE_SECRET;
@@ -17,74 +17,91 @@ const SUNWAVE_URL    = 'https://emr.sunwavehealth.com/SunwaveEMR/api/opportunity
 function buildAuthHeader(bodyString) {
   const dateTime    = new Date().toUTCString();
   const dateTimeB64 = Buffer.from(dateTime).toString('base64');
-
-  const md5Hex  = crypto.createHash('md5').update(bodyString).digest('hex');
-  const md5B64  = Buffer.from(md5Hex).toString('base64')
-                    .replace(/\//g, '_').replace(/\+/g, '-');
-
+  const md5Hex      = crypto.createHash('md5').update(bodyString).digest('hex');
+  const md5B64      = Buffer.from(md5Hex).toString('base64')
+                        .replace(/\//g, '_').replace(/\+/g, '-');
   const transactionId = uuidv4();
-
-  const seed = [
-    SUNWAVE_EMAIL, SUNWAVE_API_ID, dateTimeB64,
-    SUNWAVE_REALM, transactionId, md5B64
-  ].join(':');
-
+  const seed = [SUNWAVE_EMAIL, SUNWAVE_API_ID, dateTimeB64, SUNWAVE_REALM, transactionId, md5B64].join(':');
   const hmac = crypto.createHmac('sha512', SUNWAVE_SECRET)
     .update(seed).digest('base64')
     .replace(/\//g, '_').replace(/\+/g, '-');
-
   return `Digest ${SUNWAVE_EMAIL}:${SUNWAVE_API_ID}:${dateTimeB64}:${SUNWAVE_REALM}:${transactionId}:${md5B64}:${hmac}`;
 }
 
-// ── Map Jotform fields → Sunwave fields ──
-// Field names confirmed from Jotform API on 2026-03-17
-function mapFormToSunwave(f) {
+// ── Parse Jotform's nested answers structure ──
+// Jotform sends: rawRequest -> answers -> { "11": { answer: { first, last } }, "12": { answer: { month, day, year } } }
+function parseJotformAnswers(rawRequest) {
+  let parsed;
+  try { parsed = JSON.parse(rawRequest); } catch(e) { return {}; }
 
-  // Client name (qid 11, name: name11)
+  const answers = parsed.answers || parsed;
+  const f = {};
+
+  for (const qid of Object.keys(answers)) {
+    const q = answers[qid];
+    const name = q.name;
+    const answer = q.answer;
+    if (answer === undefined || answer === null) continue;
+
+    if (typeof answer === 'object' && !Array.isArray(answer)) {
+      // Compound fields (name, address, date, phone)
+      for (const [subkey, val] of Object.entries(answer)) {
+        f[`${name}[${subkey}]`] = val;
+      }
+    } else {
+      f[name] = answer;
+    }
+  }
+  return f;
+}
+
+// ── Map fields → Sunwave ──
+function mapFormToSunwave(f) {
+  // Patient name (qid 11)
   const patientFirst = f['name11[first]'] || '';
   const patientLast  = f['name11[last]']  || '';
 
-  // Client DOB (qid 12, name: date)
+  // Patient DOB (qid 12) — Sunwave expects YYYY-MM-DD
   const dobMonth = (f['date[month]'] || '').padStart(2, '0');
   const dobDay   = (f['date[day]']   || '').padStart(2, '0');
   const dobYear  =  f['date[year]']  || '';
   const dob      = dobYear ? `${dobYear}-${dobMonth}-${dobDay}` : '';
 
-  // Parent/Guardian name (qid 17, name: name17)
+  // Parent/Guardian name (qid 17)
   const callerFirst = f['name17[first]'] || '';
   const callerLast  = f['name17[last]']  || '';
 
-  // Parent email (qid 20, name: email20)
+  // Parent email (qid 20)
   const callerEmail = f['email20'] || '';
 
-  // Parent mobile phone (qid 18, name: phoneNumber18)
-  const phone = f['phoneNumber18[full]'] || f['phoneNumber18'] || '';
+  // Parent mobile phone (qid 18)
+  const phone = f['phoneNumber18[full]'] || '';
 
-  // Insurance
+  // Insurance (qid 27: member ID, qid 28: group number)
   const memberId    = f['typeA27'] || '';
   const groupNumber = f['typeA28'] || '';
 
-  // Clinical notes
+  // Clinical notes block
   const notes = [
-    f['howDid']           ? `Referral source: ${f['howDid']}`                   : '',
-    f['legalGuardian']    ? `Guardian relationship: ${f['legalGuardian']}`       : '',
-    f['legalGuardian46']  ? `Reason for services: ${f['legalGuardian46']}`       : '',
-    f['reasonFor']        ? `History/referral: ${f['reasonFor']}`                : '',
-    f['historyRelated']   ? `Expected outcomes: ${f['historyRelated']}`          : '',
-    f['school']           ? `School: ${f['school']}`                             : '',
-    f['school51']         ? `School district: ${f['school51']}`                  : '',
-    f['schoolDistrict']   ? `Grade level: ${f['schoolDistrict']}`                : '',
-    f['currentLiving']    ? `Living situation: ${f['currentLiving']}`            : '',
-    f['typeA67']          ? `Substance use concerns: ${f['typeA67']}`            : '',
-    f['hasYour']          ? `Eating concerns: ${f['hasYour']}`                   : '',
-    f['doesYour']         ? `Mental health diagnoses: ${f['doesYour']}`          : '',
-    f['doesYour75']       ? `Mental health medications: ${f['doesYour75']}`      : '',
-    f['whoIs']            ? `Primary care provider: ${f['whoIs']}`               : '',
-    f['learningDisabilities'] ? `Abuse history: ${f['learningDisabilities']}`    : '',
-    f['hasYour91']        ? `Legal history: ${f['hasYour91']}`                   : '',
-    f['doesYour92']       ? `Aggressive behavior last month: ${f['doesYour92']}` : '',
-    f['typeA13']          ? `Sex assigned at birth: ${f['typeA13']}`             : '',
-    f['typeA94']          ? `Comments/Summary: ${f['typeA94']}`                  : '',
+    f['howDid']          ? `Referral source: ${f['howDid']}`                   : '',
+    f['legalGuardian']   ? `Guardian relationship: ${f['legalGuardian']}`      : '',
+    f['legalGuardian46'] ? `Reason for services: ${f['legalGuardian46']}`      : '',
+    f['reasonFor']       ? `History/referral: ${f['reasonFor']}`               : '',
+    f['historyRelated']  ? `Expected outcomes: ${f['historyRelated']}`         : '',
+    f['school']          ? `School: ${f['school']}`                            : '',
+    f['school51']        ? `School district: ${f['school51']}`                 : '',
+    f['schoolDistrict']  ? `Grade level: ${f['schoolDistrict']}`               : '',
+    f['currentLiving']   ? `Living situation: ${f['currentLiving']}`           : '',
+    f['typeA67']         ? `Substance use: ${f['typeA67']}`                    : '',
+    f['hasYour']         ? `Eating concerns: ${f['hasYour']}`                  : '',
+    f['doesYour']        ? `MH diagnoses: ${f['doesYour']}`                    : '',
+    f['doesYour75']      ? `MH medications: ${f['doesYour75']}`                : '',
+    f['whoIs']           ? `PCP: ${f['whoIs']}`                                : '',
+    f['learningDisabilities'] ? `Abuse history: ${f['learningDisabilities']}`  : '',
+    f['hasYour91']       ? `Legal history: ${f['hasYour91']}`                  : '',
+    f['doesYour92']      ? `Aggressive behavior: ${f['doesYour92']}`           : '',
+    f['typeA13']         ? `Sex assigned at birth: ${f['typeA13']}`            : '',
+    f['typeA94']         ? `Comments: ${f['typeA94']}`                         : '',
   ].filter(Boolean).join('\n');
 
   return {
@@ -107,8 +124,9 @@ function mapFormToSunwave(f) {
 // ── Webhook endpoint ──
 app.post('/webhook', async (req, res) => {
   try {
-    const raw    = req.body;
-    const fields = raw['rawRequest'] ? JSON.parse(raw['rawRequest']) : raw;
+    const body = req.body;
+    const rawRequest = body['rawRequest'];
+    const fields = rawRequest ? parseJotformAnswers(rawRequest) : body;
 
     const payload    = mapFormToSunwave(fields);
     const bodyString = JSON.stringify(payload);
@@ -116,10 +134,7 @@ app.post('/webhook', async (req, res) => {
 
     const response = await fetch(SUNWAVE_URL, {
       method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': authHeader,
-      },
+      headers: { 'Content-Type': 'application/json', 'Authorization': authHeader },
       body: bodyString,
     });
 
@@ -134,7 +149,7 @@ app.post('/webhook', async (req, res) => {
     }
 
   } catch (err) {
-    console.error('[ERROR] Webhook handler threw:', err.message);
+    console.error('[ERROR]', err.message);
     return res.status(500).json({ status: 'error', message: 'Internal server error' });
   }
 });
